@@ -1,0 +1,9 @@
+# 依赖与构建产物
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/
+*.db
+*.db-wal
+*.db-shm

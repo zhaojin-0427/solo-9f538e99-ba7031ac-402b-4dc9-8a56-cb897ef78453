@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}版本历史 · 河道氨氮快照发布平台{% endblock %}
+{% block content %}
+<h1>版本历史</h1>
+<p class="muted">每个版本都是完整快照，发布后不可修改；当前版为最新一次校验通过的整份数据。</p>
+
+<section class="card">
+  <h2>全部版本</h2>
+  {% if versions %}
+    <table>
+      <thead><tr><th>版本</th><th>记录数</th><th>来源文件</th><th>发布时间</th><th>文件大小</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for version in versions %}
+          <tr{% if current and version.version_no == current.version_no %} class="is-current"{% endif %}>
+            <td>v{{ version.version_no }}{% if current and version.version_no == current.version_no %} <span class="chip">当前</span>{% endif %}</td>
+            <td>{{ version.row_count }}</td>
+            <td>{{ version.filename }}</td>
+            <td>{{ version.created_at }}</td>
+            <td>{{ version.byte_size }} B</td>
+            <td>
+              <a href="/versions/{{ version.version_no }}">查看</a>
+              <a href="/download/{{ version.version_no }}">下载</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">暂无版本。</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>上传审计</h2>
+  {% if events %}
+    <table>
+      <thead><tr><th>时间</th><th>文件</th><th>结果</th><th>版本</th><th>说明</th></tr></thead>
+      <tbody>
+        {% for item in events %}
+          <tr>
+            <td>{{ item.created_at }}</td>
+            <td>{{ item.filename }}</td>
+            <td><span class="status status-{{ item.outcome }}">{{ outcome_labels.get(item.outcome, item.outcome) }}</span></td>
+            <td>{% if item.version_no %}<a href="/versions/{{ item.version_no }}">v{{ item.version_no }}</a>{% else %}—{% endif %}</td>
+            <td class="message-cell">{{ item.message }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">暂无上传记录。</p>
+  {% endif %}
+</section>
+{% endblock %}

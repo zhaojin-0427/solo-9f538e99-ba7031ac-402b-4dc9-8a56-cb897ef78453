@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}v{{ version.version_no }} · 河道氨氮快照发布平台{% endblock %}
+{% block content %}
+<p><a href="/versions">← 返回版本历史</a></p>
+<h1>版本 v{{ version.version_no }}{% if current and version.version_no == current.version_no %} <span class="chip">当前</span>{% endif %}</h1>
+
+<section class="card">
+  <dl class="facts">
+    <dt>记录数</dt><dd>{{ version.row_count }}</dd>
+    <dt>来源文件</dt><dd>{{ version.filename }}</dd>
+    <dt>发布时间</dt><dd>{{ version.created_at }}</dd>
+    <dt>SHA-256（原始上传）</dt><dd class="mono">{{ version.source_sha256 }}</dd>
+    <dt>SHA-256（发布内容）</dt><dd class="mono">{{ version.content_sha256 }}</dd>
+  </dl>
+  <p><a class="button" href="/download/{{ version.version_no }}">下载此版本 CSV</a></p>
+</section>
+
+<section class="card">
+  <h2>记录（共 {{ total }} 条，第 {{ page }} / {{ pages }} 页）</h2>
+  <table>
+    <thead><tr><th>站点</th><th>采样时间 (UTC)</th><th>结果 (mg/L)</th><th>来源</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.station }}</td>
+          <td>{{ row.sampled_at }}</td>
+          <td>{{ row.result_mg_l }}</td>
+          <td class="muted">{{ row.source_value }} {{ row.source_unit }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="muted">没有记录。</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if pages > 1 %}
+    <p class="pager">
+      {% if page > 1 %}<a href="/versions/{{ version.version_no }}?page={{ page - 1 }}">上一页</a>{% endif %}
+      <span>第 {{ page }} / {{ pages }} 页</span>
+      {% if page < pages %}<a href="/versions/{{ version.version_no }}?page={{ page + 1 }}">下一页</a>{% endif %}
+    </p>
+  {% endif %}
+</section>
+{% endblock %}

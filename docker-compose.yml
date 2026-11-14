@@ -1,0 +1,17 @@
+services:
+  water-quality:
+    build: .
+    image: water-quality-snapshot:latest
+    container_name: water-quality-snapshot
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      WATER_DATA_DIR: /data
+      WATER_MAX_UPLOAD_MB: "${WATER_MAX_UPLOAD_MB:-10}"
+      WATER_MAX_ROWS: "${WATER_MAX_ROWS:-200000}"
+    volumes:
+      - water-data:/data
+    restart: unless-stopped
+
+volumes:
+  water-data:

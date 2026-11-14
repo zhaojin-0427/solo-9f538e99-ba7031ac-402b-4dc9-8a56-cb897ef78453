@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}上传快照 · 河道氨氮快照发布平台{% endblock %}
+{% block content %}
+
+{% if event %}
+  {% set label = outcome_labels.get(event.outcome, event.outcome) %}
+  <section class="banner banner-{{ event.outcome }}">
+    <strong>{{ label }}</strong>
+    <p>{{ event.message }}</p>
+    {% if event_details and event_details.get('merged_duplicates') %}
+      <p class="muted">同一快照内数值一致的重复行已合并 {{ event_details['merged_duplicates'] }} 行。</p>
+    {% endif %}
+    {% if event_details and event_details.get('change_summary') %}
+      {% set cs = event_details['change_summary'] %}
+      <p class="muted">
+        与上一版对比：新增 {{ cs.get('added', 0) }} 条，数值变化 {{ cs.get('changed', 0) }} 条，
+        移除 {{ cs.get('removed', 0) }} 条。
+        {% if cs.get('changed', 0) %}
+          同站同时间被新快照修订的记录已用新值覆盖（快照为完整数据集）。
+        {% endif %}
+      </p>
+    {% endif %}
+  </section>
+{% endif %}
+
+{% if upload_error %}
+  <section class="banner banner-error" role="alert">
+    <strong>未发布</strong>
+    <p>{{ upload_error }}</p>
+    {% if uploaded_filename %}<p class="muted">文件：{{ uploaded_filename }}</p>{% endif %}
+    {% if previous %}
+      <p class="muted">当前可下载版本仍为 <strong>v{{ previous.version_no }}</strong>。</p>
+    {% elif current %}
+      <p class="muted">当前可下载版本仍为 <strong>v{{ current.version_no }}</strong>。</p>
+    {% else %}
+      <p class="muted">当前还没有已发布版本。</p>
+    {% endif %}
+  </section>
+
+  {% set details = event_details or (upload_result.error_details if upload_result else {}) %}
+  {% if details and details.get('conflicts') %}
+    <section class="card">
+      <h2>同站同采样时间冲突</h2>
+      <p class="muted">以下记录换算为 mg/L 后数值不一致，整份快照已拒绝。请修正实验室导出后重新上传。</p>
+      <table>
+        <thead>
+          <tr><th>站点</th><th>采样时间</th><th>冲突值（mg/L）</th><th>来源行</th></tr>
+        </thead>
+        <tbody>
+          {% for conflict in details['conflicts'] %}
+            <tr>
+              <td>{{ conflict.station }}</td>
+              <td>{{ conflict.sampled_at }}</td>
+              <td>
+                {% for value in conflict['readings'] %}
+                  <span class="chip">{{ value.result_mg_l }}</span>
+                {% endfor %}
+              </td>
+              <td>
+                {% for value in conflict['readings'] %}
+                  第 {{ value.line }} 行（{{ value.source_value }} {{ value.source_unit }}）{% if not loop.last %}<br>{% endif %}
+                {% endfor %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if details.get('conflict_count', 0) > details['conflicts']|length %}
+        <p class="muted">仅显示前 {{ details['conflicts']|length }} 处，共 {{ details.get('conflict_count') }} 处。</p>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {% if details and details.get('errors') %}
+    <section class="card">
+      <h2>数据错误</h2>
+      <table>
+        <thead><tr><th>行号</th><th>问题</th></tr></thead>
+        <tbody>
+          {% for error in details['errors'] %}
+            <tr><td>{{ error.line }}</td><td>{{ error.message }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if details.get('error_count', 0) > details['errors']|length %}
+        <p class="muted">仅显示前 {{ details['errors']|length }} 行，共 {{ details.get('error_count') }} 行有问题。</p>
+      {% endif %}
+    </section>
+  {% endif %}
+{% endif %}
+
+<div class="grid">
+  <section class="card">
+    <h2>当前数据集</h2>
+    {% if current %}
+      <dl class="facts">
+        <dt>版本</dt><dd>v{{ current.version_no }}</dd>
+        <dt>记录数</dt><dd>{{ current.row_count }}</dd>
+        <dt>来源文件</dt><dd>{{ current.filename }}</dd>
+        <dt>发布时间</dt><dd>{{ current.created_at }}</dd>
+        <dt>单位</dt><dd>mg/L（已统一换算）</dd>
+      </dl>
+      <p>
+        <a class="button" href="/download/current">下载当前版 CSV</a>
+        <a class="button secondary" href="/versions/{{ current.version_no }}">查看记录</a>
+      </p>
+    {% else %}
+      <p class="muted">尚未发布任何版本。上传第一份完整快照后即可下载。</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>上传完整快照</h2>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+      <label class="file-input">
+        <input type="file" name="file" accept=".csv,text/csv" required>
+      </label>
+      <p class="muted">
+        CSV 必须包含站点、采样时间、结果、单位四列；单位支持 mg/L 与 μg/L。
+        文件须为完整快照，校验通过后整份发布。单文件上限 {{ max_upload_mb }} MB。
+      </p>
+      <button type="submit" class="button">校验并发布</button>
+    </form>
+    <details class="hint">
+      <summary>表头别名与示例</summary>
+      <p>站点 / station / site_id，采样时间 / sample_time / sampling_time，
+         结果 / result / value，单位 / unit。也可使用中文表头。</p>
+      <pre>站点,采样时间,结果,单位
+闸口站,2026-11-02 08:00,0.42,mg/L
+桥头站,2026-11-02 08:00,480,μg/L</pre>
+      <p>同一站点同一采样时间若出现换算后不一致的结果，整份上传会被拒绝并列出冲突，旧版本保持可下载。</p>
+    </details>
+  </section>
+</div>
+
+<section class="card">
+  <h2>最近上传记录</h2>
+  {% if events %}
+    <table>
+      <thead><tr><th>时间</th><th>文件</th><th>结果</th><th>版本</th><th>说明</th></tr></thead>
+      <tbody>
+        {% for item in events %}
+          <tr>
+            <td>{{ item.created_at }}</td>
+            <td>{{ item.filename }}</td>
+            <td><span class="status status-{{ item.outcome }}">{{ outcome_labels.get(item.outcome, item.outcome) }}</span></td>
+            <td>{% if item.version_no %}<a href="/versions/{{ item.version_no }}">v{{ item.version_no }}</a>{% else %}—{% endif %}</td>
+            <td class="message-cell">{{ item.message }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">暂无上传记录。</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>最近版本</h2>
+  {% if versions %}
+    <table>
+      <thead><tr><th>版本</th><th>记录数</th><th>来源文件</th><th>发布时间</th><th>下载</th></tr></thead>
+      <tbody>
+        {% for version in versions %}
+          <tr{% if current and version.version_no == current.version_no %} class="is-current"{% endif %}>
+            <td>v{{ version.version_no }}{% if current and version.version_no == current.version_no %} <span class="chip">当前</span>{% endif %}</td>
+            <td>{{ version.row_count }}</td>
+            <td>{{ version.filename }}</td>
+            <td>{{ version.created_at }}</td>
+            <td><a href="/download/{{ version.version_no }}">CSV</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p><a href="/versions">查看全部版本与上传记录 →</a></p>
+  {% else %}
+    <p class="muted">暂无版本。</p>
+  {% endif %}
+</section>
+
+{% endblock %}

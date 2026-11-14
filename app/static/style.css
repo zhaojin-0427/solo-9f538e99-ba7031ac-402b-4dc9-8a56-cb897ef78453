@@ -1,0 +1,129 @@
+:root {
+  --bg: #f4f6f5;
+  --surface: #ffffff;
+  --ink: #1e2a26;
+  --muted: #5f716b;
+  --line: #d8e0dc;
+  --accent: #0f6b5c;
+  --accent-strong: #0a4f44;
+  --danger: #a33a2b;
+  --danger-bg: #fbecea;
+  --ok-bg: #e8f4ef;
+  --notice-bg: #eef2f1;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.6 "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.wrap { width: min(1080px, 92vw); margin: 0 auto; }
+
+.site-header {
+  background: var(--accent-strong);
+  color: #fff;
+  padding: 0.9rem 0;
+}
+
+.header-inner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.brand { color: #fff; text-decoration: none; font-weight: 600; letter-spacing: 0.02em; }
+.site-header nav a { color: #cfe6e0; text-decoration: none; margin-left: 1.25rem; }
+.site-header nav a:hover { color: #fff; }
+
+main.wrap { padding: 1.5rem 0 2rem; }
+
+h1 { font-size: 1.55rem; margin: 0.4rem 0 0.9rem; }
+h2 { font-size: 1.1rem; margin: 0 0 0.8rem; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.15rem 1.25rem;
+  margin-bottom: 1.1rem;
+}
+
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
+@media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+
+.banner {
+  border-radius: 10px;
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 1.1rem;
+  border: 1px solid var(--line);
+  background: var(--notice-bg);
+}
+.banner p { margin: 0.3rem 0; }
+.banner-published { background: var(--ok-bg); border-color: #b7d8ca; }
+.banner-duplicate { background: #eef2f1; border-color: var(--line); }
+.banner-rejected, .banner-failed, .banner-error {
+  background: var(--danger-bg);
+  border-color: #e6bcb4;
+}
+.banner-rejected strong, .banner-failed strong, .banner-error strong { color: var(--danger); }
+
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; margin: 0 0 0.9rem; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; word-break: break-all; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+th, td { text-align: left; padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; background: #fafbfb; }
+tr.is-current td { background: #f2f9f6; }
+.message-cell { color: var(--muted); }
+
+.chip {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: #e3efe9;
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.status { font-size: 0.82rem; padding: 0.05rem 0.45rem; border-radius: 999px; white-space: nowrap; }
+.status-published { background: var(--ok-bg); color: var(--accent-strong); }
+.status-duplicate { background: var(--notice-bg); color: var(--muted); }
+.status-rejected, .status-failed { background: var(--danger-bg); color: var(--danger); }
+
+.button {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  padding: 0.5rem 0.95rem;
+  text-decoration: none;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+.button:hover { background: var(--accent-strong); }
+.button.secondary { background: transparent; color: var(--accent-strong); border-color: var(--line); }
+.button.secondary:hover { background: #eef4f2; }
+
+.file-input input[type="file"] { display: block; margin-bottom: 0.6rem; }
+button[type="submit"] { margin-top: 0.6rem; }
+
+.muted { color: var(--muted); font-size: 0.9rem; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+
+pre {
+  background: #f6f8f7;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
+
+details.hint summary { cursor: pointer; color: var(--accent-strong); }
+
+.pager { display: flex; gap: 1rem; align-items: center; }
+.pager a { color: var(--accent-strong); }
+
+.site-footer { color: var(--muted); font-size: 0.85rem; padding-bottom: 2rem; }

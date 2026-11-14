@@ -7,11 +7,16 @@ Invariants enforced here:
 * Old version survives failures: the version file is written first (atomically,
   under a brand-new name); if the database registration fails, the new file is
   removed and the transaction rolled back, leaving the previous version file
-  and the current-version pointer untouched.
+  and the current-version pointer untouched.  After a successful commit the
+  file belongs to the live snapshot and is never removed by failure handling.
 * Idempotent uploads: a byte-identical (or data-identical) file never creates a
   second version, even when two uploads race.
 * Downloads can never mix versions: version files are immutable and named by
   version number, so a reader that opened version N reads all of N.
+* The on-disk ``CURRENT`` pointer never goes backwards: concurrent publishes
+  update it under a lock and only when the new version is higher, so once both
+  uploads have returned it names the last committed snapshot even if their
+  post-commit pointer writes finish out of order.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ from .db import (
     next_version_no,
     observations_for_version,
     set_current_version,
+    utc_now,
     write_transaction,
 )
 from .storage import Storage, StorageError
@@ -313,6 +319,7 @@ class Publisher:
     ) -> PublishResult:
         version_no: int | None = None
         file_written = False
+        committed = False
         event_id: int | None = None
 
         try:
@@ -337,11 +344,12 @@ class Publisher:
                 if self.before_register is not None:
                     self.before_register(version_no)
 
+                created_at = utc_now()
                 tx.execute(
                     "INSERT INTO versions"
                     "(version_no, filename, stored_name, source_sha256, content_sha256,"
                     " data_sha256, row_count, byte_size, created_at) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))",
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         version_no,
                         filename,
@@ -351,6 +359,7 @@ class Publisher:
                         data_sha,
                         len(snapshot.observations),
                         len(content),
+                        created_at,
                     ),
                 )
                 tx.executemany(
@@ -389,15 +398,36 @@ class Publisher:
                     ),
                 )
 
-            version = get_version(conn, version_no)
-            if version is None:  # pragma: no cover - commit succeeded but row lost
-                raise sqlite3.OperationalError("提交后无法读取版本记录")
+            # From here on the version is durable: the immutable file exists and
+            # its database row and current pointer committed atomically.  Nothing
+            # below may roll it back or delete the file.
+            committed = True
+
             # Record the committed pointer on disk too.  This happens after the
-            # commit, so it can only lag, never lead, the authoritative state.
+            # commit, so it can only lag, never lead, the authoritative state;
+            # it is monotonic under a lock, so the newest commit wins even when
+            # two publishes finish out of order.  The pointer is advisory, and
+            # the version is already durable: no failure here may be reported
+            # as a failed publish or remove the committed file.
             try:
                 self.storage.write_current_pointer(version_no)
-            except StorageError:
+            except Exception:
                 log.exception("could not update on-disk current-version pointer")
+
+            # Build the response from the values captured inside the transaction.
+            # A database that becomes unreadable after the commit must not turn
+            # a successful publish into a reported failure.
+            version = Version(
+                version_no=version_no,
+                filename=filename,
+                stored_name=self.storage.version_filename(version_no),
+                source_sha256=source_sha,
+                content_sha256=content_sha,
+                data_sha256=data_sha,
+                row_count=len(snapshot.observations),
+                byte_size=len(content),
+                created_at=created_at,
+            )
             return PublishResult(
                 outcome=OUTCOME_PUBLISHED,
                 message=(
@@ -410,10 +440,13 @@ class Publisher:
                 change_summary=change_summary,
             )
         except (StorageError, sqlite3.Error, OSError, PublishError) as exc:
-            # The transaction is rolled back by ``write_transaction``.  Delete
-            # the freshly written file: it belongs to no version, and leaving it
-            # would let a later version number collide with stale bytes.
-            if file_written and version_no is not None:
+            # Something failed before the commit: ``write_transaction`` has
+            # rolled back, so the current pointer still names the previous
+            # version.  Delete the freshly written file only in that case -- it
+            # belongs to no committed version, and leaving it would let a later
+            # version number collide with stale bytes.  After a successful commit
+            # the file is the live snapshot and must never be removed here.
+            if not committed and file_written and version_no is not None:
                 self.storage.remove_version(version_no)
             previous = self._safe_current()
             message = (

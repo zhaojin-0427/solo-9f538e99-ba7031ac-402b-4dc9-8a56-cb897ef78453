@@ -256,3 +256,75 @@ def test_degraded_download_never_serves_unregistered_file(client):
 def test_pointer_is_written_after_publish(client):
     upload(client, "lab.csv", GOOD)
     assert client.app.state.storage.read_current_pointer() == 1
+
+
+SECOND = (
+    "站点,采样时间,结果,单位\n"
+    "闸口站,2026-11-09 08:00,0.51,mg/L\n"
+    "渡口站,2026-11-09 08:00,620,μg/L\n"
+).encode("utf-8")
+
+
+def test_two_publishes_then_outage_downloads_last_committed_snapshot(client, monkeypatch):
+    """After two successful uploads an outage must not serve the older one.
+
+    The on-disk CURRENT pointer is what identifies the committed snapshot when
+    the database is unreadable; if concurrent publishes let the earlier
+    request write it back, the browser would download stale data whose version
+    header still claims to be current.
+    """
+
+    import sqlite3
+
+    import app.main as main_module
+
+    assert upload(client, "first.csv", GOOD).status_code == 303
+    assert upload(client, "second.csv", SECOND).status_code == 303
+
+    # Both publishes returned successfully; the database now goes away.
+    def broken_connect(*args, **kwargs):
+        raise sqlite3.OperationalError("simulated outage")
+
+    monkeypatch.setattr(main_module, "connect", broken_connect)
+
+    response = client.get("/download/current")
+    assert response.status_code == 200
+    assert response.headers["X-Snapshot-Version"] == "2"
+    body = response.text
+    # The body is exactly the last committed snapshot, not a mixture.
+    assert "2026-11-09" in body and "渡口站" in body
+    assert "2026-11-02" not in body
+    expected = client.app.state.storage.version_path(2).read_bytes()
+    assert response.content == expected
+    assert int(response.headers["Content-Length"]) == len(expected)
+
+
+def test_outage_download_ignores_unregistered_newer_file(client, monkeypatch):
+    """A file written before its registration committed is never current."""
+
+    import sqlite3
+
+    import app.main as main_module
+
+    upload(client, "first.csv", GOOD)
+    upload(client, "second.csv", SECOND)
+    storage = client.app.state.storage
+    unregistered = (
+        "站点,采样时间,结果(mg/L),来源单位,原始结果\n"
+        "坏站,2026-11-20 00:00:00,9.9,mg/L,9.9\n"
+    ).encode("utf-8")
+    storage.write_version(3, unregistered)
+
+    def broken_connect(*args, **kwargs):
+        raise sqlite3.OperationalError("simulated outage")
+
+    monkeypatch.setattr(main_module, "connect", broken_connect)
+
+    current = client.get("/download/current")
+    assert current.status_code == 200
+    assert current.headers["X-Snapshot-Version"] == "2"
+    assert "坏站" not in current.text
+    assert "2026-11-09" in current.text
+
+    specific = client.get("/download/3")
+    assert specific.status_code == 503

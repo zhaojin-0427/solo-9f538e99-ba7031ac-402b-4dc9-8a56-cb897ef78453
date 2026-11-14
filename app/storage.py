@@ -10,8 +10,22 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
+
+try:  # POSIX (the Docker image); the fallback only matters for local dev.
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    fcntl = None  # type: ignore[assignment]
+
+# Serializes the read-modify-write of the on-disk pointer.  ``flock`` works
+# across threads using separate descriptors and across processes sharing the
+# data volume, which is what makes the monotonic check below reliable when two
+# uploads finish at the same time.
+_POINTER_THREAD_LOCK = threading.Lock()
 
 
 class StorageError(RuntimeError):
@@ -20,6 +34,7 @@ class StorageError(RuntimeError):
 
 class Storage:
     POINTER_NAME = "CURRENT"
+    POINTER_LOCK_NAME = "CURRENT.lock"
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = Path(data_dir)
@@ -59,12 +74,49 @@ class Storage:
         temporarily unreadable.  It is written *after* the commit and only
         increases, so it can lag behind the database but can never point at a
         version whose registration rolled back.
+
+        The read-compare-replace happens under an exclusive lock (threads and
+        processes alike).  Without it, two publishes that commit v1 and v2
+        could both read the pre-publish pointer and the slower v1 write could
+        overwrite v2, leaving the on-disk pointer behind the database.  With
+        the lock the pointer can only move forward, so once both publishes
+        have returned it always names the newest committed version no matter
+        which post-commit write runs first.
         """
 
-        existing = self.read_current_pointer()
-        if existing is not None and existing >= version_no:
-            return
         self.prepare()
+        with self._pointer_lock():
+            existing = self.read_current_pointer()
+            if existing is not None and existing >= version_no:
+                return
+            self._replace_pointer(version_no)
+
+    @contextmanager
+    def _pointer_lock(self) -> Iterator[None]:
+        """Serialize the pointer's read-modify-write across threads/processes."""
+
+        with _POINTER_THREAD_LOCK:
+            if fcntl is None:  # pragma: no cover - non-POSIX platforms
+                yield
+                return
+            lock_path = self.data_dir / self.POINTER_LOCK_NAME
+            try:
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+            except OSError as exc:
+                raise StorageError(f"无法锁定当前版本指针：{exc}") from exc
+            try:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                except OSError as exc:
+                    raise StorageError(f"无法锁定当前版本指针：{exc}") from exc
+                yield
+            finally:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
+
+    def _replace_pointer(self, version_no: int) -> None:
         fd, tmp_name = tempfile.mkstemp(
             prefix=".current.", suffix=".tmp", dir=str(self.staging_dir)
         )

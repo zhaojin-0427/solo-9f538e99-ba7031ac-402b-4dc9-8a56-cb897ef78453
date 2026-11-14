@@ -482,3 +482,115 @@ def test_rejected_snapshot_records_event_but_publishes_nothing(env):
     finally:
         conn.close()
     assert [e["outcome"] for e in events] == ["rejected"]
+
+
+# ---------------------------------------------------------------------------
+# Concurrent publishes and the on-disk pointer
+
+
+def test_two_concurrent_publishes_leave_pointer_at_latest_version(env):
+    """Both publishes succeed and the pointer names the newest committed version.
+
+    The first publish is stalled between reading the old pointer and replacing
+    it; meanwhile the second publish commits v2 and writes its pointer.  If the
+    pointer update is not serialized, the stalled v1 write lands last and the
+    on-disk pointer regresses to a stale snapshot.
+    """
+
+    storage = env["publisher"].storage
+    real_read = Storage.read_current_pointer
+    first_read = threading.Event()
+    release_first = threading.Event()
+    read_count = 0
+
+    def slow_first_read(self):
+        nonlocal read_count
+        value = real_read(self)
+        read_count += 1
+        if read_count == 1:
+            first_read.set()
+            release_first.wait(10)
+        return value
+
+    storage.read_current_pointer = lambda: slow_first_read(storage)  # type: ignore[method-assign]
+
+    v1_rows = [("闸口站", "2026-11-02 08:00", "0.42", "mg/L")]
+    v2_rows = [("闸口站", "2026-11-09 08:00", "0.55", "mg/L")]
+    results: list = []
+
+    def worker(filename, rows):
+        results.append(env["publisher"].publish(filename, make_csv(rows)))
+
+    older = threading.Thread(target=worker, args=("a.csv", v1_rows))
+    older.start()
+    assert first_read.wait(10)
+    newer = threading.Thread(target=worker, args=("b.csv", v2_rows))
+    newer.start()
+
+    # Wait until v2 itself is committed, then give its pointer write time to
+    # land before letting the stalled v1 write proceed.
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        conn = connect(env["db_path"])
+        try:
+            current = get_current_version(conn)
+        finally:
+            conn.close()
+        if current is not None and current.version_no == 2:
+            break
+        time.sleep(0.01)
+    else:  # pragma: no cover - publish never committed
+        raise AssertionError("second publish did not commit")
+    time.sleep(0.2)
+    release_first.set()
+    older.join(10)
+    newer.join(10)
+
+    assert len(results) == 2
+    assert all(r.published for r in results)
+    conn = connect(env["db_path"])
+    try:
+        current = get_current_version(conn)
+    finally:
+        conn.close()
+    assert current.version_no == 2
+    assert real_read(storage) == 2
+    # The pointer names the file whose content is the newer snapshot.
+    body = storage.version_path(2).read_text(encoding="utf-8")
+    assert "2026-11-09" in body and "2026-11-02" not in body
+
+
+def test_successful_publish_survives_pointer_write_failure(env):
+    """A committed version stays published even if the pointer write fails."""
+
+    first = seed(env["publisher"], [("闸口站", "2026-11-02 08:00", "0.42", "mg/L")])
+    assert first.published
+
+    storage = env["publisher"].storage
+    real_write = Storage.write_current_pointer
+    calls: list[int] = []
+
+    def broken_pointer(self, version_no):
+        calls.append(version_no)
+        raise __import__("app.storage", fromlist=["StorageError"]).StorageError(
+            "simulated pointer failure"
+        )
+
+    storage.write_current_pointer = broken_pointer.__get__(storage, Storage)  # type: ignore[method-assign]
+    try:
+        result = env["publisher"].publish(
+            "next.csv", make_csv([("闸口站", "2026-11-09 08:00", "0.55", "mg/L")])
+        )
+    finally:
+        storage.write_current_pointer = real_write.__get__(storage, Storage)  # type: ignore[method-assign]
+
+    assert calls == [2]  # the failure was actually injected post-commit
+    assert result.published
+    assert result.version.version_no == 2
+    # The committed file is still on disk and is now the current snapshot.
+    assert storage.version_path(2).exists()
+    body = storage.version_path(2).read_text(encoding="utf-8")
+    assert "2026-11-09" in body
+    # The next successful pointer update repairs the lagging pointer.
+    storage.write_current_pointer(2)
+    assert storage.read_current_pointer() == 2
